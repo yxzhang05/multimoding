@@ -1,0 +1,31 @@
+#根据实际的场景环境，自定义地图中的区域，可以添加任意个区域，注意和大模型的地图映射保持一致即可
+#According to the actual scene environment, customize the areas in the map. You can add any number of areas, just make sure they are consistent with the map mapping of the large model
+#地图映射Map mapping
+A: 
+  name: '主卧室'
+  position:
+    x: 1.6878514289855957
+    y: -0.32615160942077637
+    z: 0.0
+  orientation:
+    x: 0.0
+    y: 0.0
+    z: 0.4503881236302555
+    w: 0.8928328724306793
+G: 
+  name: '厨房'
+  position:
+    x: 2.367471694946289
+    y: -1.568994164466858
+    z: 0.0
+  orientation:
+    x: 0.0
+    y: 0.0
+    z: -0.3106425066197889
+    w: 0.950526818706855
+
+
+
+#此处可新增添加区域对应的栅格地图坐标点，注意和上面格式保持一致
+#Here, you can add the raster map coordinate points corresponding to the added area. Please note that the format should be consistent with the above
+

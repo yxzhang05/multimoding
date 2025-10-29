@@ -1,0 +1,9 @@
+{
+    "files.associations": {
+        "*.py": "python",
+        "*.txt": "makefile",
+        "rmw_microros.h": "c",
+        "int32.h": "c",
+        "string_utilities.h": "c"
+    }
+}
