@@ -40,6 +40,7 @@ For detailed repository structure analysis and development guide, please see:
 
 - 📄 [中文版详细分析 | Chinese Analysis](./REPOSITORY_ANALYSIS.md)
 - 📄 [English Detailed Analysis](./REPOSITORY_ANALYSIS_EN.md)
+- 🤖 [AI大模型功能分析 | AI Model Analysis](./AI_MODEL_ANALYSIS.md) - **语音/文本控制系统详解**
 
 ## 目录结构 | Directory Structure
 
