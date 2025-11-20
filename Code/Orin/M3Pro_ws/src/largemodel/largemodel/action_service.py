@@ -12,12 +12,10 @@ from cv_bridge import CvBridge
 from std_msgs.msg import String
 from sensor_msgs.msg import Image
 from nav2_msgs.action import NavigateToPose
-from std_msgs.msg import Int16MultiArray, Bool
-from arm_msgs.msg import ArmJoints, ArmJoint
+from std_msgs.msg import Bool
 from interfaces.action import Rot
 import math
 import pygame
-from arm_interface.msg import CurJoints
 import yaml
 from concurrent.futures import Future
 import psutil
@@ -41,8 +39,6 @@ class CustomActionServer(Node):
         self.init_ros_comunication()
         # 加载地图映射文件 / Load map mapping file
         self.load_target_points()
-        # 初始化机械臂抓取功能 / Initialize arm grasping function
-        self.arm_grasp_init()
         # 初始化语音合成功能 / Initialize text-to-speech synthesis function
         self.system_sound_init()
         # 初始化语言设置/Initialize language settings
@@ -53,7 +49,7 @@ class CustomActionServer(Node):
         """
         初始化参数配置 / Initialize parameter configuration
         """
-        # 设置夹取启动文件路径 / Set the path for the grasping startup file
+        # 设置启动文件路径 / Set the path for the startup file
         pkg_share = get_package_share_directory("largemodel")
         self.map_mapping_config = os.path.join(pkg_share, "config", "map_mapping.yaml")
         # 声明参数 / Declare parameters
@@ -98,9 +94,6 @@ class CustomActionServer(Node):
         self.first_record = True  # 首次记录位置 / First record
         self.is_recording = False  # 录音状态 / Recording status
         self.IS_SAVING = False #是否正在保存图像
-        self.joint6 = (
-            140  # 默认机械臂六轴的初始角度 / Default angle of the six-axis arm
-        )
 
         # 图像处理对象 / Image processing object
         self.image_msg = None
@@ -120,28 +113,10 @@ class CustomActionServer(Node):
         self._action_server = ActionServer(
             self, Rot, "action_service", self.execute_callback
         )
-        # 创建机械臂角度发布者，用于发布arm6_joints，控制机械臂 / Create arm angle publisher to publish arm6_joints and control the arm
-        self.TargetAngle_pub = self.create_publisher(ArmJoints, "arm6_joints", 100)
-        # 创建关节角度发布者，用于发布arm_joint控制关节 / Create joint angle publisher to publish arm_joint and control joints
-        self.SingleJoint_pub = self.create_publisher(ArmJoint, "arm_joint", 100)
         # 创建执行动作状态发布者 / Create action execution status publisher
         self.actionstatus_pub = self.create_publisher(String, "actionstatus", 3)
         # 创建发布者，发布 seewhat_handle 话题 / Create publisher to publish seewhat_handle topic
         self.seewhat_handle_pub = self.create_publisher(String, "seewhat_handle", 1)
-        # 创建物体位置发布者，发布待夹取物体的坐标 / Create object position publisher to publish coordinates of objects to be grasped
-        self.object_position_pub = self.create_publisher(
-            Int16MultiArray, "corner_xy", 1
-        )
-        # 创建JoyCb话题发布者，启动KCF_Tracker_ALM节点测距的功能 / Create JoyCb topic publisher to enable distance measurement functionality of KCF_Tracker_ALM node
-        self.joy_pub = self.create_publisher(Bool, "JoyState", 1)
-        # 创建当前机械臂关节角发布者 / Create current arm joint angle publisher
-        self.pub_cur_joints = self.create_publisher(CurJoints, "Curjoints", 1)
-        # 创建KCF_Tracker_ALM重置发布者 / Create KCF_Tracker_ALM reset publisher
-        self.reset_pub = self.create_publisher(Bool, "reset_flag", 1)
-        # 创建机械臂抓取完成话题订阅者 / Create subscriber for arm grasping completion topic
-        self.largemodel_arm_done_sub = self.create_subscription(
-            String, "/largemodel_arm_done", self.largemodel_arm_done_callback, 1
-        )
         # 创建发布者，发布 tts_topic 主题 / Create publisher to publish tts_topic topic
         self.TTS_publisher = self.create_publisher(String, "tts_topic", 5)
         # 创建tf监听者，监听坐标变换 / Create tf listener to monitor coordinate transformations
@@ -218,38 +193,18 @@ class CustomActionServer(Node):
                 "navigation_3": "机器人反馈:执行navigation({point_name})失败，目标点不存在",
                 "navigation_4": "机器人反馈:执行navigation({point_name})失败",
                 "get_current_pose_success": "机器人反馈:get_current_pose()成功",
-                "arm_up_done": "机器人反馈:执行arm_up()完成",
-                "arm_down_done": "机器人反馈:执行arm_down()完成",
                 "drift_done": "机器人反馈:执行drift()完成",
                 "wait_done": "机器人反馈:执行wait({duration})完成",
-                "arm_shake_done": "机器人反馈:执行arm_shake()完成",
-                "arm_nod_done": "机器人反馈:执行arm_nod()完成",
-                "arm_applaud_done": "机器人反馈:执行arm_applaud()完成",
-                "grasp_obj_done": "机器人反馈:执行grasp_obj({x1},{y1},{x2},{y2})完成",
-                "grasp_obj_failed": "机器人反馈:执行grasp_obj({x1},{y1},{x2},{y2})失败",
-                "putdown_done": "机器人反馈:执行putdown()完成",
                 "set_cmdvel_done": "机器人反馈:执行set_cmdvel({linear_x},{linear_y},{angular_z},{duration})完成",
                 "move_left_done": "机器人反馈:执行move_left({angle},{angular_speed})完成",
                 "move_right_done": "机器人反馈:执行move_right({angle},{angular_speed})完成",
                 "turn_left_done": "机器人反馈:执行turn_left()完成",
                 "turn_right_done": "机器人反馈:执行turn_right()完成",
                 "dance_done": "机器人反馈:执行dance()完成",
-                "apriltag_sort_done": "机器人反馈:执行apriltag_sort({target_id})完成",
-                "apriltag_sort_failed": "机器人反馈:执行apriltag_sort({target_id})失败",
-                "apriltag_follow_2D_done": "机器人反馈:执行apriltag_follow_2D({target_id})完成",
-                "apriltag_follow_2D_failed": "机器人反馈:执行apriltag_follow_2D({target_id})失败",
-                "apriltag_remove_higher_done": "机器人反馈:执行apriltag_remove_higher({target_high})完成",
-                "apriltag_remove_higher_failed": "机器人反馈:执行apriltag_remove_higher({target_high})失败",
-                "color_follow_2D_done": "机器人反馈:执行color_follow_2D({color})完成",
-                "color_follow_2D_failed": "机器人反馈:执行color_follow_2D({color})失败",
-                "color_remove_higher_done": "机器人反馈:执行color_remove_higher({color},{target_high})完成",
-                "color_remove_higher_failed": "机器人反馈:执行color_remove_higher({color},{target_high})失败",
-                "follw_line_clear_done": "机器人反馈:执行follw_line_clear()完成",
                 "response_done": "机器人反馈：回复用户完成",
                 "failure_execute_action_function_not_exists": "机器人反馈:动作函数不存在，无法执行",
                 "finish": "finish",
                 "multiple_done": "机器人反馈：执行{actions}完成",
-                "putdown_failed": "机器人反馈:执行putdown()失败,输入参数错误",
             },
             "en": {  # 英文 / English
                 "navigation_1": "Robot feedback: Navigation target {point_name} rejected",
@@ -257,33 +212,14 @@ class CustomActionServer(Node):
                 "navigation_3": "Robot feedback: Execute navigation({point_name}) failed, target does not exist",
                 "navigation_4": "Robot feedback: Execute navigation({point_name}) failed",
                 "get_current_pose_success": "Robot feedback: get_current_pose() succeeded",
-                "arm_up_done": "Robot feedback: Execute arm_up() completed",
-                "arm_down_done": "Robot feedback: Execute arm_down() completed",
                 "drift_done": "Robot feedback: Execute drift() completed",
                 "wait_done": "Robot feedback: Execute wait({duration}) completed",
-                "arm_shake_done": "Robot feedback: Execute arm_shake() completed",
-                "arm_nod_done": "Robot feedback: Execute arm_nod() completed",
-                "arm_applaud_done": "Robot feedback: Execute arm_applaud() completed",
-                "grasp_obj_done": "Robot feedback: Execute grasp_obj({x1},{y1},{x2},{y2}) completed",
-                "grasp_obj_failed": "Robot feedback: Execute grasp_obj({x1},{y1},{x2},{y2}) failed",
-                "putdown_done": "Robot feedback: Execute putdown() completed",
                 "set_cmdvel_done": "Robot feedback: Execute set_cmdvel({linear_x},{linear_y},{angular_z},{duration}) completed",
                 "move_left_done": "Robot feedback: Execute move_left({angle},{angular_speed}) completed",
                 "move_right_done": "Robot feedback: Execute move_right({angle},{angular_speed}) completed",
                 "turn_left_done": "Robot feedback: Execute turn_left() completed",
                 "turn_right_done": "Robot feedback: Execute turn_right() completed",
                 "dance_done": "Robot feedback: Execute dance() completed",
-                "apriltag_sort_done": "Robot feedback: Execute apriltag_sort({target_id}) completed",
-                "apriltag_sort_failed": "Robot feedback: Execute apriltag_sort({target_id}) failed",
-                "apriltag_follow_2D_done": "Robot feedback: Execute apriltag_follow_2D({target_id}) completed",
-                "apriltag_follow_2D_failed": "Robot feedback: Execute apriltag_follow_2D({target_id}) failed",
-                "apriltag_remove_higher_done": "Robot feedback: Execute apriltag_remove_higher({target_high}) completed",
-                "apriltag_remove_higher_failed": "Robot feedback: Execute apriltag_remove_higher({target_high}) failed",
-                "color_follow_2D_done": "Robot feedback: Execute color_follow_2D({color}) completed",
-                "color_follow_2D_failed": "Robot feedback: Execute color_follow_2D({color}) failed",
-                "color_remove_higher_done": "Robot feedback: Execute color_remove_higher({color},{target_high}) completed",
-                "color_remove_higher_failed": "Robot feedback: Execute color_remove_higher({color},{target_high}) failed",
-                "follw_line_clear_done": "Robot feedback: Execute follw_line_clear() completed",
                 "response_done": "Robot feedback: Reply to user completed",
                 "failure_execute_action_function_not_exists": "Robot feedback: Execute action function not exists",
                 "finish": "finish",
@@ -310,43 +246,6 @@ class CustomActionServer(Node):
             pose.pose.orientation.w = data["orientation"]["w"]
             self.navpose_dict[name] = pose
 
-    def arm_grasp_init(self):
-        """
-        初始化机械臂抓取功能 /initialize the grasping function of the robotic arm
-        """
-        # 机械臂状态变量/Robotic arm status variable
-        self.up_joints = [90, 90, 90, 90, 90, 90]
-        self.down_joints = [90, 0, 90, 90, 90, 90]
-        self.detect_joints = [90, 120, 0, 0, 90, 90]
-        self.init_joints = [
-            90,
-            130,
-            0,
-            5,
-            90,
-            0,
-        ]
-        # 机械臂初始姿态/robot arm initial pose
-        self.putsown_joints = [
-            90,
-            10,
-            50,
-            50,
-            90,
-            135,
-        ]  # 机械臂放下姿态/robot arm putdown pose
-        while not self.TargetAngle_pub.get_subscription_count():
-            self.pubSix_Arm(self.init_joints)
-            time.sleep(0.1)
-        self.pubSix_Arm(self.init_joints)
-        self.apriltag_sort_future = Future()
-        self.apriltag_follow_2D_future = Future()
-        self.apriltag_remove_higher_future = Future()
-        self.color_follow_2D_future = Future()
-        self.color_sort_future = Future()
-        self.color_remove_higher_future = Future()
-        self.grasp_obj_future = Future()
-        self.follw_line_clear_future = Future()
 
     def record_status_callback(self, msg):
         # self.get_logger().info(f"record_status_callback:{msg.data}")
@@ -355,39 +254,6 @@ class CustomActionServer(Node):
         else:
             self.is_recording = False
 
-    def largemodel_arm_done_callback(self, msg):
-        """
-        机械臂抓取完成话题回调函数/robot arm done callback function
-        用于接受机械臂抓取完成话题，并设置Future对象完成 /used to receive the topic of the robotic arm grasping completion, and set the Future object to complete
-        """
-        if msg.data in ["apriltag_sort_done", "apriltag_sort_failed"]:
-            if not self.apriltag_sort_future.done():
-                self.apriltag_sort_future.set_result(msg)
-        elif msg.data == "apriltag_follow_2D_done":
-            if not self.apriltag_follow_2D_future.done():
-                self.apriltag_follow_2D_future.set_result(msg)
-        elif msg.data in [
-            "apriltag_remove_higher_done",
-            "apriltag_remove_higher_failed",
-        ]:
-            self.get_logger().info(f"msg.data:{msg.data}")
-            if not self.apriltag_remove_higher_future.done():
-                self.apriltag_remove_higher_future.set_result(msg)
-        elif msg.data == "color_follow_2D_done":
-            if not self.color_follow_2D_future.done():
-                self.color_follow_2D_future.set_result(msg)
-        elif msg.data == "color_sort_done":
-            if not self.color_sort_future.done():
-                self.color_sort_future.set_result(msg)
-        elif msg.data == "grasp_obj_done":
-            if not self.grasp_obj_future.done():
-                self.grasp_obj_future.set_result(msg)
-        elif msg.data == "color_remove_higher_done":
-            if not self.color_remove_higher_future.done():
-                self.color_remove_higher_future.set_result(msg)
-        elif msg.data == "follw_line_clear_future_done":
-            if not self.follw_line_clear_future.done():
-                self.follw_line_clear_future.set_result(msg)
 
     def wakeup_callback(self, msg):
         """
@@ -526,71 +392,6 @@ class CustomActionServer(Node):
             time.sleep(0.1)
         self.stop()
 
-    def pubSix_Arm(self, joints, id=6, angle=180.0, runtime=2000):
-        while not self.TargetAngle_pub.get_subscription_count():
-            self.get_logger().info("Waiting for arm_subscriber...")
-            time.sleep(0.1)
-
-        arm_joint = ArmJoints()
-        arm_joint.joint1 = joints[0]
-        arm_joint.joint2 = joints[1]
-        arm_joint.joint3 = joints[2]
-        arm_joint.joint4 = joints[3]
-        arm_joint.joint5 = joints[4]
-        arm_joint.joint6 = joints[5]
-        arm_joint.time = runtime
-        self.TargetAngle_pub.publish(arm_joint)
-
-    def pubSingle_Arm(self, joint_id=6, joint_angle=180.0, runtime=800):
-        arm_joint = ArmJoint()
-        arm_joint.joint = int(joint_angle)
-        arm_joint.id = int(joint_id)
-        arm_joint.time = runtime
-        self.SingleJoint_pub.publish(arm_joint)
-
-    def pubCurrentJoints(self):
-        cur_joints = CurJoints()
-        cur_joints.joints = self.init_joints
-        self.pub_cur_joints.publish(cur_joints)
-
-    def arm_up(self):  # 机械臂向上
-        self.done = False
-        self.pubSix_Arm(self.up_joints)
-        time.sleep(1.0)
-        self.done = True
-        if not self.combination_mode and not self.interrupt_flag:
-            self.action_status_pub("arm_up_done")
-
-    def arm_down(self):  # 机械臂向下
-        self.done = False
-        self.pubSix_Arm(self.down_joints)
-        time.sleep(1.0)
-        self.done = True
-        if not self.combination_mode and not self.interrupt_flag:
-            self.action_status_pub("arm_down_done")
-
-    def arm_dance(self):  # 机械臂跳舞
-        dance_moves = [
-            [90, 90, 90, 90, 90, 90],
-            [90, 60, 120, 60, 90, 90],
-            [90, 45, 135, 45, 90, 90],
-            [90, 60, 120, 60, 90, 90],
-            [90, 90, 90, 90, 90, 90],
-            [90, 100, 80, 80, 90, 90],
-            [90, 120, 60, 60, 90, 90],
-            [90, 135, 45, 45, 90, 90],
-            [90, 90, 90, 90, 90, 90],
-            [90, 90, 90, 20, 90, 150],
-            [90, 90, 90, 90, 90, 90],
-            [90, 90, 90, 20, 90, 150],
-        ]
-        for joints in dance_moves:
-            if self.interrupt_flag:
-                break
-            self.pubSix_Arm(joints)
-            time.sleep(1.0)
-        self.pubSix_Arm(self.init_joints)
-
     def drift(self):
         """
         漂移动作
@@ -608,208 +409,6 @@ class CustomActionServer(Node):
         time.sleep(duration)
         if not self.combination_mode and not self.interrupt_flag:
             self.action_status_pub("wait_done", duration=duration)
-
-    def arm_shake(self):  # 机械臂摇头
-        for i in range(3):
-            if self.interrupt_flag:
-                break
-            tar_arm_joint = [140, 130, 0, 5, 90, 0]
-            self.pubSix_Arm(tar_arm_joint)
-            time.sleep(1.0)
-            tar_arm_joint = [40, 130, 0, 5, 90, 0]
-            self.pubSix_Arm(tar_arm_joint)
-            time.sleep(1.0)
-
-        self.pubSix_Arm(self.init_joints)
-        if not self.combination_mode and not self.interrupt_flag:
-            self.action_status_pub("arm_shake_done")
-
-    def arm_nod(self):  # 机械臂点头
-        for i in range(3):
-            if self.interrupt_flag:
-                break
-            tar_arm_joint = [90, 130, 0, 95, 90, 0]
-            self.pubSix_Arm(tar_arm_joint)
-            time.sleep(1.0)
-            self.pubSix_Arm(self.init_joints)
-            time.sleep(1.0)
-        self.pubSix_Arm(self.init_joints)
-        if not self.combination_mode and not self.interrupt_flag:
-            self.action_status_pub("arm_nod_done")
-
-    def arm_applaud(self):  # 机械臂鼓掌
-        for i in range(3):
-            if self.interrupt_flag:
-                break
-            tar_arm_joint = [90, 145, 0, 71, 90, 31]
-            self.pubSix_Arm(tar_arm_joint)
-            time.sleep(1.0)
-            tar_arm_joint = [90, 145, 0, 71, 90, 168]
-            self.pubSix_Arm(tar_arm_joint)
-            time.sleep(1.0)
-        self.pubSix_Arm(self.init_joints)
-        if not self.combination_mode and not self.interrupt_flag:
-            self.action_status_pub("arm_applaud_done")
-
-
-    def check_track(self):
-        """
-        检查相关进程是否存活
-        """
-        try:
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "KCF_Track"], check=False, timeout=2
-            )
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "ALM_KCF_Tracker_Node"], check=False, timeout=2
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            subprocess.run(["pkill", "-f", "KCF_track"])
-            subprocess.run(["pkill", "-f", "ALM_KCF_Tracker_Node"])
-
-    def track(self, x1, y1, x2, y2):
-        """
-        追踪物体
-        x1,y1,x2,y2: 物体外边框坐标
-        """
-        self.check_track()
-        cmd1 = "ros2 run largemodel_arm KCF_track"
-        cmd2 = "ros2 run M3Pro_KCF ALM_KCF_Tracker_Node"
-
-        subprocess.Popen( 
-            [
-                "gnome-terminal",
-                "--title=KCF_track",
-                "--",
-                "bash",
-                "-c",
-                f"{cmd2}; exec bash",
-            ]
-        )
-        subprocess.Popen(
-            [
-                "gnome-terminal",
-                "--title=ALM_KCF_Tracker_Node",
-                "--",
-                "bash",
-                "-c",
-                f"{cmd1}; exec bash",
-            ]
-        )
-        time.sleep(5.0) #等待ALM_KCF_Tracker_Node启动完成
-
-        x1 = int(x1)
-        y1 = int(y1)
-        x2 = int(x2)
-        y2 = int(y2)
-        self.object_position_pub.publish(Int16MultiArray(data=[x1, y1, x2, y2]))
-        while True:
-            if self.interrupt_flag:
-                self.check_track()
-                self.pubSix_Arm(self.init_joints)
-                return
-            time.sleep(0.1)
-        self.pubSix_Arm(self.init_joints)
-
-    def check_close_grasp_obj(self):
-        """
-        检查相关进程是否存活
-        """
-        try:
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "grasp_desktop"], check=False, timeout=2
-            )
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "KCF_follow"], check=False, timeout=2
-            )
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "ALM_KCF_Tracker"], check=False, timeout=2
-            )
-        except subprocess.TimeoutExpired:
-            # 如果关闭窗口超时，尝试强制杀死进程
-            subprocess.run(["pkill", "-f", "grasp_desktop"])
-            subprocess.run(["pkill", "-f", "KCF_follow"])
-            subprocess.run(["pkill", "-f", "ALM_KCF_Tracker_Node"])
-
-
-    def grasp_obj(self, x1, y1, x2, y2):
-        """
-        抓取物体
-        x1,y1,x2,y2: 物体外边框坐标
-        """
-        self.check_close_grasp_obj()
-        cmd1 = "ros2 run largemodel_arm grasp_desktop"
-        cmd2 = "ros2 run largemodel_arm KCF_follow"
-        cmd3 = "ros2 run M3Pro_KCF ALM_KCF_Tracker_Node"
-        # cmd3 = "ros2 run --prefix 'gdb -ex run --args' M3Pro_KCF ALM_KCF_Tracker_Node"
-        subprocess.Popen(
-            [
-                "gnome-terminal",
-                "--title=ALM_KCF_Tracker",
-                "--",
-                "bash",
-                "-c",
-                f"{cmd3}; exec bash",
-            ]
-        )
-        time.sleep(5.0) #等待ALM_KCF_Tracker_Node启动完成
-        subprocess.Popen(
-            [
-                "gnome-terminal",
-                "--title=grasp_desktop",
-                "--",
-                "bash",
-                "-c",
-                f"{cmd1}; exec bash",
-            ]
-        )
-        subprocess.Popen(
-            [
-                "gnome-terminal",
-                "--title=KCF_follow",
-                "--",
-                "bash",
-                "-c",
-                f"{cmd2}; exec bash",
-            ]
-        )
-        time.sleep(1.0)
-        x1 = int(x1)
-        y1 = int(y1)
-        x2 = int(x2)
-        y2 = int(y2)
-        self.object_position_pub.publish(Int16MultiArray(data=[x1, y1, x2, y2]))
-
-        while not self.grasp_obj_future.done():
-            if self.interrupt_flag:
-                self.check_close_grasp_obj()
-                self.pubSix_Arm(self.init_joints)  # 机械臂收回
-                self.stop()
-                return
-            time.sleep(0.1)
-
-        result = self.grasp_obj_future.result()
-        if not self.interrupt_flag:
-            if result.data == "grasp_obj_done":
-                self.action_status_pub("grasp_obj_done", x1=x1, y1=y1, x2=x2, y2=y2)
-            else:
-                self.action_status_pub("grasp_obj_failed", x1=x1, y1=y1, x2=x2, y2=y2)
-
-        self.check_close_grasp_obj()
-        self.grasp_obj_future = Future()  # 复位Future对象
-        if self.interrupt_flag:
-            time.sleep(0.5)
-            self.pubSix_Arm(self.init_joints)  # 机械臂收回
-
-    def putdown(self):
-        self.pubSix_Arm(self.putsown_joints)  # 机械臂下放
-        time.sleep(4)
-        self.pubSingle_Arm(6, 30, 1000)  # 机械臂打开夹抓，放下物品
-        time.sleep(3)
-        self.pubSix_Arm(self.init_joints)  # 机械臂收回
-        if not self.interrupt_flag:
-            self.action_status_pub("putdown_done")
-
 
     def seewhat(self):
         self.save_single_image()
@@ -893,8 +492,6 @@ class CustomActionServer(Node):
             self.action_status_pub("turn_right_done")
 
     def dance(self):  # 跳舞
-        thread = Thread(target=self.arm_dance)
-        thread.start()
         actions = [
             {"linear_x": 0.6, "linear_y": 0.0, "angular_z": 0.0, "durationtime": 1.5},
             {"linear_x": -0.4, "linear_y": 0.0, "angular_z": 0.0, "durationtime": 1.0},
@@ -913,9 +510,7 @@ class CustomActionServer(Node):
             twist.angular.z = action["angular_z"]
             self._execute_action(twist, durationtime=action["durationtime"])
 
-        thread.join(timeout=5.0)
         self.stop()
-        self.pubSix_Arm(self.init_joints)
         if not self.combination_mode and not self.interrupt_flag:
             self.action_status_pub("dance_done")
 
@@ -936,303 +531,8 @@ class CustomActionServer(Node):
                 self.publisher.publish(twist)
                 time.sleep(0.1)
 
-    def check_apriltag_sort(self):
-        try:
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "grasp_desktop_apritag"], check=False, timeout=2
-            )
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "apriltag_sort"], check=False, timeout=2
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            subprocess.run(["pkill", "-f", "grasp_desktop"])
-            subprocess.run(["pkill", "-f", "apriltag_sort"])
-
-    def apriltag_sort(self, target_id):  # 夹取机器码
-        self.check_apriltag_sort()
-        target_idf = float(target_id)
-        cmd1 = "ros2 run largemodel_arm grasp_desktop_apritag"
-        cmd2 = f"ros2 run largemodel_arm apriltag_sort --ros-args -p target_id:={target_idf:.1f}"
-        subprocess.Popen(
-            [
-                "gnome-terminal",
-                "--title=grasp_desktop_apritag",
-                "--",
-                "bash",
-                "-c",
-                f"{cmd1}; exec bash",
-            ]
-        )
-        subprocess.Popen(
-            [
-                "gnome-terminal",
-                "--title=apriltag_sort",
-                "--",
-                "bash",
-                "-c",
-                f"{cmd2}; exec bash",
-            ]
-        )
-
-        while not self.apriltag_sort_future.done():
-            if self.interrupt_flag:
-                self.check_apriltag_sort()
-                self.stop()
-                self.pubSix_Arm(self.init_joints)
-                return
-            time.sleep(0.1)
-
-        result = self.apriltag_sort_future.result()
-        if not self.interrupt_flag:
-            if result.data == "apriltag_sort_done":
-                self.action_status_pub("apriltag_sort_done", target_id=target_id)
-            elif result.data == "apriltag_sort_failed":
-                self.action_status_pub("apriltag_sort_failed", target_id=target_id)
-
-        self.check_apriltag_sort()
-        self.apriltag_sort_future = Future()  # 复位Future对象
-
-    def check_apriltag_remove_higher(self):
-        try:
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "grasp_desktop_remove"], check=False, timeout=2
-            )
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "apriltag_remove_higher"], check=False, timeout=2
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            subprocess.run(["pkill", "-f", "grasp_desktop_remove"])
-            subprocess.run(["pkill", "-f", "apriltag_remove_higher"])
-
-    def apriltag_remove_higher(self, target_high):  # 移除指定高度的机器码
-        self.check_apriltag_remove_higher()
-        target_highf = float(target_high) / 100
-        cmd1 = "ros2 run largemodel_arm grasp_desktop_remove"
-        cmd2 = f"ros2 run largemodel_arm apriltag_remove_higher --ros-args -p target_high:={target_highf:.2f}"
-        subprocess.Popen(
-            [
-                "gnome-terminal",
-                "--title=grasp_desktop_remove",
-                "--",
-                "bash",
-                "-c",
-                f"{cmd1}; exec bash",
-            ]
-        )
-        subprocess.Popen(
-            [
-                "gnome-terminal",
-                "--title=apriltag_remove_higher",
-                "--",
-                "bash",
-                "-c",
-                f"{cmd2}; exec bash",
-            ]
-        )
-
-        while not self.apriltag_remove_higher_future.done():
-            if self.interrupt_flag:
-                self.check_apriltag_remove_higher()
-                self.stop()
-                self.pubSix_Arm(self.init_joints)
-                return
-            time.sleep(0.1)
-        result = self.apriltag_remove_higher_future.result()
-
-        if not self.interrupt_flag:
-            if result.data == "apriltag_remove_higher_done":
-                self.action_status_pub(
-                    "apriltag_remove_higher_done", target_high=target_high
-                )
-            elif result.data == "apriltag_remove_higher_failed":
-                self.action_status_pub(
-                    "apriltag_remove_higher_failed", target_high=target_high
-                )
-
-        self.check_apriltag_remove_higher()
-        self.apriltag_remove_higher_future = Future()  # 复位Future对象
-        self.pubSix_Arm(self.init_joints)
-
-    def check_color_remove_higher(self):
-        try:
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "grasp_desktop_remove_color"], check=False, timeout=2
-            )
-            subprocess.run(["wmctrl", "-F", "-c", "color_remove_higher"], check=False, timeout=2)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            subprocess.run(["pkill", "-f", "grasp_desktop_remove_color"])
-            subprocess.run(["pkill", "-f", "color_remove_higher"])
-
-    def color_remove_higher(self, color, target_high):
-        self.check_color_remove_higher()
-        arm_joints = [90, 110, 0, 0, 90, 0]
-        self.pubSix_Arm(arm_joints)
-        color = color.strip("'\"")  # 去掉单引号和双引号
-        target_highf = float(target_high) / 100
-        if color == "red":
-            target_color = float(1)
-        elif color == "green":
-            target_color = float(2)
-        elif color == "blue":
-            target_color = float(3)
-        elif color == "yellow":
-            target_color = float(4)
-        else:
-            self.get_logger().info(
-                "Fatal ERROR:Incorrect color input,Does the AI output not meet expectations?"
-            )
-            self.action_status_pub(
-                "color_remove_higher_failed", color=color, target_high=target_high
-            )
-            return
-        
-        cmd1 = "ros2 run largemodel_arm grasp_desktop_remove_color"
-        cmd2 = f"ros2 run largemodel_arm color_remove_higher --ros-args -p target_high:={target_highf:.2f} -p target_color:={target_color:.1f}"
-        subprocess.Popen(
-            [
-                "gnome-terminal",
-                "--title=grasp_desktop_remove_color",
-                "--",
-                "bash",
-                "-c",
-                f"{cmd1}; exec bash",
-            ]
-        )
-        subprocess.Popen(
-            [
-                "gnome-terminal",
-                "--title=color_remove_higher",
-                "--",
-                "bash",
-                "-c",
-                f"{cmd2}; exec bash",
-            ]
-        )
-
-        while not self.color_remove_higher_future.done():
-            if self.interrupt_flag:
-                self.check_color_remove_higher()
-                self.stop()
-                self.pubSix_Arm(self.init_joints)
-                return
-            time.sleep(0.1)
-
-        result = self.color_remove_higher_future.result()
-        if not self.interrupt_flag:
-            if result.data == "color_remove_higher_done":
-                self.action_status_pub(
-                    "color_remove_higher_done", color=color, target_high=target_high
-                )
-            else:
-                self.action_status_pub(
-                    "color_remove_higher_failed", color=color, target_high=target_high
-                )
-
-        self.check_color_remove_higher()
-        self.color_remove_higher_future = Future()  # 复位Future对象
-        self.pubSix_Arm(self.init_joints)
-
-    def check_follw_line_clear(self):
-        try:
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "grasp_desktop_remove"], check=False, timeout=2
-            )
-            subprocess.run(["wmctrl", "-F", "-c", "follow_line"], check=False, timeout=2)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            subprocess.run(["pkill", "-f", "grasp_desktop_remove"])
-            subprocess.run(["pkill", "-f", "follow_line"])
-
-    def follw_line_clear(self) -> None:
-        self.check_follw_line_clear()
-        cmd1 = "ros2 run largemodel_arm grasp_desktop_remove"
-        cmd2 = "ros2 run largemodel_arm follow_line --ros-args -p start_follow:=True"
-        subprocess.Popen(
-            [
-                "gnome-terminal",
-                "--title=grasp_desktop_remove",
-                "--",
-                "bash",
-                "-c",
-                f"{cmd1}; exec bash",
-            ]
-        )
-        subprocess.Popen(
-            [
-                "gnome-terminal",
-                "--title=follow_line",
-                "--",
-                "bash",
-                "-c",
-                f"{cmd2}; exec bash",
-            ]
-        )
-
-        while not self.follw_line_clear_future.done():
-            if self.interrupt_flag:
-                self.check_follw_line_clear()
-                self.stop()
-                self.pubSix_Arm(self.init_joints)
-                return
-            time.sleep(0.1)
-
-        if not self.interrupt_flag:
-            if self.follw_line_clear_future.result() is not None:
-                self.action_status_pub("follw_line_clear_done")
-
-        self.check_follw_line_clear()
-        self.follw_line_clear_future = Future()  # 复位Future对象
-        self.pubSix_Arm(self.init_joints)
-
-
     def check_all_process(self):
-        try:
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "KCF_Track"], check=False, timeout=2
-            )
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "ALM_KCF_Tracker_Node"], check=False, timeout=2
-            )
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "ALM_KCF_Tracker"], check=False, timeout=2
-            )
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "grasp_desktop"], check=False, timeout=2
-            )
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "KCF_follow"], check=False, timeout=2
-            )
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "apriltag_sort"], check=False, timeout=2
-            )
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "grasp_desktop_apritag"], check=False, timeout=2
-            )
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "grasp_desktop_remove"], check=False, timeout=2
-            )
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "apriltag_remove_higher"], check=False, timeout=2
-            )
-
-            subprocess.run(
-                ["wmctrl", "-F", "-c", "grasp_desktop_remove_color"], check=False, timeout=2
-            )
-            subprocess.run(["wmctrl", "-F", "-c", "color_remove_higher"], check=False, timeout=2)
-
-            subprocess.run(["wmctrl", "-F", "-c", "follow_line"], check=False, timeout=2)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            subprocess.run(["pkill", "-f", "KCF_track"])
-            subprocess.run(["pkill", "-f", "ALM_KCF_Tracker_Node"])
-            subprocess.run(["pkill", "-f", "ALM_KCF_Tracker"])
-            subprocess.run(["pkill", "-f", "grasp_desktop"])
-            subprocess.run(["pkill", "-f", "KCF_follow"])
-            subprocess.run(["pkill", "-f", "apriltag_sort"])
-            subprocess.run(["pkill", "-f", "grasp_desktop_apritag"])
-            subprocess.run(["pkill", "-f", "grasp_desktop_remove"])
-            subprocess.run(["pkill", "-f", "apriltag_remove_higher"])
-            subprocess.run(["pkill", "-f", "grasp_desktop_remove_color"])
-            subprocess.run(["pkill", "-f", "color_remove_higher"])
-            subprocess.run(["pkill", "-f", "follow_line"])
+        pass
 
 
 
@@ -1347,7 +647,6 @@ class CustomActionServer(Node):
     def finish_dialogue(self):  # 发布AI模型结束当前流程标志
         self.first_record = True  # 重置导航记录标志位 # Reset navigation record flag
         self.is_recording = False  # 重置录音标志位  # Reset recording flag
-        self.pubSix_Arm(self.init_joints)
         self.action_status_pub("finish")  # 结束当前任务
 
     def finishtask(self):
